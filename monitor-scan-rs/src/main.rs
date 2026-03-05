@@ -1,7 +1,10 @@
 use clap::Parser;
 use pcap::Capture;
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // --- CLI ---
@@ -269,9 +272,43 @@ fn run_cmd(cmd: &str, args: &[&str]) -> Result<String, String> {
 }
 
 fn sudo(args: &[&str]) -> Result<String, String> {
-    Command::new("sudo").args(args).output()
-        .map_err(|e| format!("sudo: {}", e))
-        .and_then(|o| if o.status.success() { Ok(String::from_utf8_lossy(&o.stdout).to_string()) } else { Err(String::from_utf8_lossy(&o.stderr).to_string()) })
+    sudo_timeout(args, 5)
+}
+
+fn sudo_timeout(args: &[&str], timeout_secs: u64) -> Result<String, String> {
+    // Skip sudo if already root
+    let (cmd, cmd_args): (&str, Vec<&str>) = if unsafe { libc::geteuid() } == 0 {
+        (args[0], args[1..].to_vec())
+    } else {
+        let mut a = vec!["-n"];
+        a.extend_from_slice(args);
+        ("sudo", a)
+    };
+    let mut child = Command::new(cmd).args(&cmd_args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{}: {}", cmd, e))?;
+
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = child.stdout.take().map(|mut s| { let mut b = String::new(); s.read_to_string(&mut b).ok(); b }).unwrap_or_default();
+                let stderr = child.stderr.take().map(|mut s| { let mut b = String::new(); s.read_to_string(&mut b).ok(); b }).unwrap_or_default();
+                return if status.success() { Ok(stdout) } else { Err(stderr) };
+            }
+            Ok(None) => {
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("timeout ({}s): {} {:?}", timeout_secs, cmd, args));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("{}: {}", cmd, e)),
+        }
+    }
 }
 
 struct IfState { iface: String, conn: String }
@@ -306,24 +343,41 @@ impl IfState {
         let _ = sudo(&["ip", "link", "set", &self.iface, "up"]);
         let _ = run_cmd("nmcli", &["dev", "set", &self.iface, "managed", "yes"]);
         if !self.conn.is_empty() {
-            std::thread::sleep(Duration::from_secs(1));
-            let _ = run_cmd("nmcli", &["con", "up", &self.conn]);
+            // Wait for NM to detect the interface, retry connection
+            for attempt in 1..=5 {
+                std::thread::sleep(Duration::from_secs(2));
+                if run_cmd("nmcli", &["con", "up", &self.conn]).is_ok() {
+                    eprintln!("[monitor-scan] WiFi reconnected (attempt {})", attempt);
+                    return;
+                }
+            }
+            eprintln!("[monitor-scan] Warning: could not reconnect to '{}', try manually: nmcli con up \"{}\"", self.conn, self.conn);
         }
     }
 }
 
 // --- Auto channel detection ---
-fn auto_detect(iface: &str, state: &IfState) -> u32 {
+fn auto_detect(iface: &str, state: &IfState, interrupted: &AtomicBool) -> u32 {
     let channels = [1, 6, 11, 36, 40, 44, 48, 52, 56, 60, 64, 100, 149, 153, 157, 161, 165];
     let (mut best_ch, mut best_n) = (1u32, 0u64);
+    let global_timeout = Instant::now();
+    let max_detect_time = Duration::from_secs(30); // Max 30s for auto-detect
+
     for &ch in &channels {
+        if interrupted.load(Ordering::SeqCst) { break; }
+        if global_timeout.elapsed() > max_detect_time {
+            eprintln!("[monitor-scan] Auto-detect timeout (30s), using best so far");
+            break;
+        }
         if state.set_channel(ch).is_err() { continue; }
-        let mut cap = match Capture::from_device(iface as &str).and_then(|c| c.timeout(1100).open()) {
+        std::thread::sleep(Duration::from_millis(50)); // Let channel switch settle
+        let mut cap = match Capture::from_device(iface as &str).and_then(|c| c.timeout(100).open()) {
             Ok(c) => c, Err(_) => continue,
         };
         let start = Instant::now();
         let mut n = 0u64;
-        while start.elapsed() < Duration::from_secs(1) {
+        while start.elapsed() < Duration::from_millis(1500) {
+            if interrupted.load(Ordering::SeqCst) { break; }
             if cap.next_packet().is_ok() { n += 1; }
         }
         eprint!("  ch {}: {} frames\n", ch, n);
@@ -334,7 +388,7 @@ fn auto_detect(iface: &str, state: &IfState) -> u32 {
 }
 
 // --- Capture & Parse ---
-fn capture(iface: &str, dur: u64, channel: u32) -> Result<(HashMap<[u8; 6], ClientInfo>, HashMap<[u8; 6], String>, u64, String), String> {
+fn capture(iface: &str, dur: u64, channel: u32, interrupted: &AtomicBool) -> Result<(HashMap<[u8; 6], ClientInfo>, HashMap<[u8; 6], String>, u64, String), String> {
     let mut cap = Capture::from_device(iface as &str)
         .map_err(|e| e.to_string())?
         .snaplen(512).timeout(1000)
@@ -350,6 +404,10 @@ fn capture(iface: &str, dur: u64, channel: u32) -> Result<(HashMap<[u8; 6], Clie
     eprintln!("[monitor-scan] Capturing on channel {} for {}s...", channel, dur);
 
     while start.elapsed() < timeout {
+        if interrupted.load(Ordering::SeqCst) {
+            eprintln!("[monitor-scan] Interrupted, stopping capture...");
+            break;
+        }
         let pkt = match cap.next_packet() {
             Ok(p) => p,
             Err(_) => continue,
@@ -546,6 +604,14 @@ fn main() {
 
     let state = IfState::save(&cli.interface);
 
+    // Ctrl+C handler — just set the flag, main thread handles cleanup
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let int_flag = interrupted.clone();
+    ctrlc::set_handler(move || {
+        eprintln!("\n[monitor-scan] Ctrl+C received, stopping...");
+        int_flag.store(true, Ordering::SeqCst);
+    }).expect("Error setting Ctrl+C handler");
+
     // Panic hook to restore interface
     let (ifc, cnc) = (cli.interface.clone(), state.conn.clone());
     std::panic::set_hook(Box::new(move |info| {
@@ -560,18 +626,26 @@ fn main() {
     }
 
     let channel = if cli.channel == 0 {
-        eprintln!("[monitor-scan] Auto-detecting best channel...");
-        auto_detect(&cli.interface, &state)
+        eprintln!("[monitor-scan] Auto-detecting best channel (max 30s)...");
+        auto_detect(&cli.interface, &state, &interrupted)
     } else {
         if let Err(e) = state.set_channel(cli.channel) { eprintln!("Error: {}", e); state.restore(); std::process::exit(1); }
         cli.channel
     };
 
-    let (clients, aps, total, ssid) = match capture(&cli.interface, cli.duration, channel) {
+    if interrupted.load(Ordering::SeqCst) {
+        eprintln!("[monitor-scan] Restoring {} to managed mode...", cli.interface);
+        state.restore();
+        eprintln!("[monitor-scan] Interface restored.");
+        std::process::exit(130);
+    }
+
+    let (clients, aps, total, ssid) = match capture(&cli.interface, cli.duration, channel, &interrupted) {
         Ok(r) => r,
         Err(e) => { eprintln!("Error: {}", e); state.restore(); std::process::exit(1); }
     };
 
+    // Generate report even if interrupted (partial data is still useful)
     eprintln!("[monitor-scan] Generating report: {}", cli.output);
     let html = gen_html(&clients, &aps, total, channel, &ssid, cli.duration);
     std::fs::write(&cli.output, html).expect("Cannot write report");
