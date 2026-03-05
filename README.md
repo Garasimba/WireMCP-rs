@@ -19,6 +19,7 @@ Forked from [0xKoda/WireMCP](https://github.com/0xKoda/WireMCP) and rewritten wi
 | **`check_ip_threats`** | Check a specific IP against URLhaus IOCs | JS |
 | **`analyze_pcap`** | Analyze existing PCAP files. Modes: `basic` or `full` | Rust |
 | **`extract_credentials`** | Extract credentials from PCAP (HTTP Basic, FTP, Telnet, Kerberos hashes) | tshark |
+| **`analyze_ddos`** | DDoS attack detection and analysis (25+ attack patterns, live or PCAP) | Rust |
 | **`monitor_scan`** | WiFi monitor mode scan with HTML report (clients, vendors, WiFi standards, signal) | Rust |
 
 ### Native Rust Parsing (basic mode)
@@ -35,6 +36,57 @@ The `capture-rs` binary parses packets natively without tshark:
 - **TLS** (SNI from ClientHello, version 1.0-1.3 via Supported Versions extension)
 - **HTTP/1.x** (method, URI, Host, User-Agent, status, Content-Type, Server)
 - **DHCP** (message type, hostname, vendor class, assigned IP)
+
+### DDoS Detection Engine (analyze_ddos)
+
+The `analyze_ddos` tool detects 25+ attack patterns from live traffic or PCAP files:
+
+**L3/L4 Volumetric Floods:**
+- SYN Flood (SYN/SYN+ACK ratio analysis)
+- ACK Flood, RST Flood, FIN Flood
+- UDP Flood (volume-based detection)
+- ICMP Flood
+- IP Fragmentation attack
+
+**Amplification/Reflection (14 protocols):**
+
+| Protocol | Port | Max Amplification |
+|----------|------|-------------------|
+| DNS | 53 | x54 000 |
+| Memcached | 11211 | x51 000 |
+| WS-Discovery | 3702 | x500 |
+| NTP | 123 | x556 |
+| Chargen | 19 | x358 |
+| Jenkins | 33848 | x100 |
+| CLDAP | 389 | x70 |
+| ARMS | 3283 | x35 |
+| CoAP | 5683 | x34 |
+| SSDP/UPnP | 1900 | x30 |
+| RPC Portmap | 111 | x7 |
+| SNMP | 161 | x6.3 |
+| Steam | 27015 | x5.5 |
+| NetBIOS | 137 | x3.8 |
+
+**L7 Application Layer:**
+- HTTP/S GET Flood
+- HTTP/S POST Flood
+- WordPress XML-RPC Flood (pingback abuse)
+- Random Path / Cache Bypass Flood (unique URI tracking)
+- Rotating User-Agent Bot Detection (L7 botnet fingerprinting)
+- HTTP Carpet Bombing (requests spread across many destination IPs)
+
+**Slow Attacks:**
+- Slowloris detection (many connections, small packets over long duration)
+- Slow POST / RUDY detection
+
+**DNS Attacks:**
+- DNS Carpet Bombing (many unique subdomains of the same base domain)
+
+**Meta Detection:**
+- Multi-vector attack detection (automatic identification of simultaneous attack types)
+- Distributed attack detection (many sources, high packet rate)
+- Port scan / Scattershot detection
+- Traffic timeline with per-second packet and bandwidth visualization
 
 ### WiFi Monitor Mode (monitor-scan-rs)
 
@@ -125,6 +177,10 @@ node monitor-scan.js --interface wlo1 --channel 0 --duration 30 --output report.
 ./capture-rs/target/release/capture-packets --interface wlo1 --duration 5 --mode basic
 ./capture-rs/target/release/capture-packets --mode stats --file capture.pcap
 ./capture-rs/target/release/capture-packets --mode conversations --interface wlo1 --duration 10
+
+# DDoS analysis (live or PCAP)
+./capture-rs/target/release/capture-packets --mode ddos --interface eth0 --duration 60
+./capture-rs/target/release/capture-packets --mode ddos --file attack.pcap
 ```
 
 ## Performance
@@ -139,10 +195,10 @@ node monitor-scan.js --interface wlo1 --channel 0 --duration 30 --output report.
 
 ```
 WireMCP-rs/
-  index.js              # MCP server (8 tools, prompts)
+  index.js              # MCP server (9 tools, prompts)
   monitor-scan.js       # Standalone monitor mode CLI
-  capture-rs/           # Rust: packet capture + parsing
-    src/main.rs         #   Modes: basic, full, stats, conversations
+  capture-rs/           # Rust: packet capture + parsing + DDoS detection
+    src/main.rs         #   Modes: basic, full, stats, conversations, ddos
   monitor-scan-rs/      # Rust: WiFi monitor mode scanner
     src/main.rs         #   802.11 parsing, HTML report generation
 ```
