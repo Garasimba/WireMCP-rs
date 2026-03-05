@@ -1145,9 +1145,16 @@ fn run_ddos(cli: &Cli) {
         let msg = format!("SYN Flood: {} SYN, ratio SYN/SYN+ACK={:.1} (normal~1.0)", total_syn, syn_ratio);
         println!("  >> {}", msg); alerts.push(msg);
     }
-    // ACK Flood
-    if total_ack_only > 100 && pct(total_ack_only, total_pkts) > 60.0 {
-        let msg = format!("ACK Flood: {} ACK-only packets ({:.0}%)", total_ack_only, pct(total_ack_only, total_pkts));
+    // ACK Flood — only flag if: high ACK ratio + many sources (distributed) + low payload ratio
+    // Normal TCP traffic has lots of ACK-only packets (data acknowledgements), so we need
+    // additional signals: many unique sources AND high packet rate AND ACK-only packets
+    // dominate over PSH (data-carrying) packets
+    let psh_total: u64 = sources.values().map(|s| s.psh_count).sum();
+    let ack_no_data_ratio = if psh_total > 0 { total_ack_only as f64 / psh_total as f64 } else { 999.0 };
+    if total_ack_only > 500 && pct(total_ack_only, total_pkts) > 60.0
+        && ack_no_data_ratio > 10.0 && sources.len() > 20 && pps > 500.0 {
+        let msg = format!("ACK Flood: {} ACK-only packets ({:.0}%), {:.0}x vs data pkts, {} sources",
+            total_ack_only, pct(total_ack_only, total_pkts), ack_no_data_ratio, sources.len());
         println!("  >> {}", msg); alerts.push(msg);
     }
     // RST Flood
