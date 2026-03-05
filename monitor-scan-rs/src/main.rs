@@ -3,9 +3,19 @@ use pcap::Capture;
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+static mut INTERRUPTED: libc::c_int = 0;
+
+fn is_interrupted() -> bool {
+    unsafe { std::ptr::read_volatile(&INTERRUPTED) != 0 }
+}
+
+extern "C" fn sigint_handler(_sig: libc::c_int) {
+    unsafe { std::ptr::write_volatile(&mut INTERRUPTED, 1); }
+    let msg = b"\n[monitor-scan] Ctrl+C received, stopping...\n";
+    unsafe { libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len()); }
+}
 
 // --- CLI ---
 #[derive(Parser)]
@@ -357,28 +367,34 @@ impl IfState {
 }
 
 // --- Auto channel detection ---
-fn auto_detect(iface: &str, state: &IfState, interrupted: &AtomicBool) -> u32 {
+fn auto_detect(iface: &str, state: &IfState) -> u32 {
     let channels = [1, 6, 11, 36, 40, 44, 48, 52, 56, 60, 64, 100, 149, 153, 157, 161, 165];
     let (mut best_ch, mut best_n) = (1u32, 0u64);
     let global_timeout = Instant::now();
     let max_detect_time = Duration::from_secs(30); // Max 30s for auto-detect
 
     for &ch in &channels {
-        if interrupted.load(Ordering::SeqCst) { break; }
+        if is_interrupted() { break; }
         if global_timeout.elapsed() > max_detect_time {
             eprintln!("[monitor-scan] Auto-detect timeout (30s), using best so far");
             break;
         }
         if state.set_channel(ch).is_err() { continue; }
         std::thread::sleep(Duration::from_millis(50)); // Let channel switch settle
-        let mut cap = match Capture::from_device(iface as &str).and_then(|c| c.timeout(100).open()) {
+        let cap = match Capture::from_device(iface as &str).and_then(|c| c.timeout(100).open()) {
+            Ok(c) => c, Err(_) => continue,
+        };
+        let mut cap = match cap.setnonblock() {
             Ok(c) => c, Err(_) => continue,
         };
         let start = Instant::now();
         let mut n = 0u64;
         while start.elapsed() < Duration::from_millis(1500) {
-            if interrupted.load(Ordering::SeqCst) { break; }
-            if cap.next_packet().is_ok() { n += 1; }
+            if is_interrupted() { break; }
+            match cap.next_packet() {
+                Ok(_) => { n += 1; }
+                Err(_) => { std::thread::sleep(Duration::from_millis(10)); }
+            }
         }
         eprint!("  ch {}: {} frames\n", ch, n);
         if n > best_n { best_n = n; best_ch = ch; }
@@ -388,11 +404,12 @@ fn auto_detect(iface: &str, state: &IfState, interrupted: &AtomicBool) -> u32 {
 }
 
 // --- Capture & Parse ---
-fn capture(iface: &str, dur: u64, channel: u32, interrupted: &AtomicBool) -> Result<(HashMap<[u8; 6], ClientInfo>, HashMap<[u8; 6], String>, u64, String), String> {
-    let mut cap = Capture::from_device(iface as &str)
+fn capture(iface: &str, dur: u64, channel: u32) -> Result<(HashMap<[u8; 6], ClientInfo>, HashMap<[u8; 6], String>, u64, String), String> {
+    let cap = Capture::from_device(iface as &str)
         .map_err(|e| e.to_string())?
-        .snaplen(512).timeout(1000)
+        .snaplen(512).timeout(100)
         .open().map_err(|e| e.to_string())?;
+    let mut cap = cap.setnonblock().map_err(|e| e.to_string())?;
 
     let mut clients: HashMap<[u8; 6], ClientInfo> = HashMap::new();
     let mut aps: HashMap<[u8; 6], String> = HashMap::new();
@@ -404,13 +421,16 @@ fn capture(iface: &str, dur: u64, channel: u32, interrupted: &AtomicBool) -> Res
     eprintln!("[monitor-scan] Capturing on channel {} for {}s...", channel, dur);
 
     while start.elapsed() < timeout {
-        if interrupted.load(Ordering::SeqCst) {
+        if is_interrupted() {
             eprintln!("[monitor-scan] Interrupted, stopping capture...");
             break;
         }
         let pkt = match cap.next_packet() {
             Ok(p) => p,
-            Err(_) => continue,
+            Err(_) => {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
         };
         total += 1;
         let data = pkt.data;
@@ -604,13 +624,20 @@ fn main() {
 
     let state = IfState::save(&cli.interface);
 
-    // Ctrl+C handler — just set the flag, main thread handles cleanup
-    let interrupted = Arc::new(AtomicBool::new(false));
-    let int_flag = interrupted.clone();
-    ctrlc::set_handler(move || {
-        eprintln!("\n[monitor-scan] Ctrl+C received, stopping...");
-        int_flag.store(true, Ordering::SeqCst);
-    }).expect("Error setting Ctrl+C handler");
+    // Ignore SIGHUP/SIGTERM so terminal can't kill us before cleanup
+    unsafe {
+        libc::signal(libc::SIGHUP, libc::SIG_IGN);
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+    }
+
+    // Raw SIGINT handler — no SA_RESTART so poll() returns EINTR
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = sigint_handler as usize;
+        sa.sa_flags = 0; // No SA_RESTART — poll/read will return EINTR
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
+    }
 
     // Panic hook to restore interface
     let (ifc, cnc) = (cli.interface.clone(), state.conn.clone());
@@ -627,20 +654,20 @@ fn main() {
 
     let channel = if cli.channel == 0 {
         eprintln!("[monitor-scan] Auto-detecting best channel (max 30s)...");
-        auto_detect(&cli.interface, &state, &interrupted)
+        auto_detect(&cli.interface, &state)
     } else {
         if let Err(e) = state.set_channel(cli.channel) { eprintln!("Error: {}", e); state.restore(); std::process::exit(1); }
         cli.channel
     };
 
-    if interrupted.load(Ordering::SeqCst) {
+    if is_interrupted() {
         eprintln!("[monitor-scan] Restoring {} to managed mode...", cli.interface);
         state.restore();
         eprintln!("[monitor-scan] Interface restored.");
         std::process::exit(130);
     }
 
-    let (clients, aps, total, ssid) = match capture(&cli.interface, cli.duration, channel, &interrupted) {
+    let (clients, aps, total, ssid) = match capture(&cli.interface, cli.duration, channel) {
         Ok(r) => r,
         Err(e) => { eprintln!("Error: {}", e); state.restore(); std::process::exit(1); }
     };
