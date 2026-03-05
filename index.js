@@ -537,6 +537,137 @@ server.tool(
   }
 );
 
+// Tool 10: Create baseline profile of normal behavior
+server.tool(
+  'create_baseline',
+  'Capture traffic and build a baseline profile of normal network behavior. Save as JSON for later anomaly detection. Run this during known-good conditions.',
+  {
+    interface: z.string().optional().default('eth0').describe('Network interface to capture from'),
+    duration: z.number().optional().default(60).describe('Capture duration in seconds (longer = better baseline)'),
+    outputPath: z.string().optional().default('').describe('Output JSON file path (default: ./baseline.json)'),
+  },
+  async (args) => {
+    const captureBin = path.join(__dirname, 'capture-rs', 'target', 'release', 'capture-packets');
+    try { await fs.access(captureBin); } catch {
+      return { content: [{ type: 'text', text: `Error: Rust binary not found at ${captureBin}. Run: cd capture-rs && cargo build --release` }], isError: true };
+    }
+    try {
+      const iface = sanitizeIface(args.interface);
+      const duration = args.duration;
+      const outputFile = args.outputPath || path.join(process.cwd(), 'baseline.json');
+      console.error(`[create_baseline] Building profile on ${iface} for ${duration}s`);
+      const env = { ...process.env, BASELINE_OUTPUT: outputFile };
+      const { stdout, stderr } = await execAsync(
+        `${captureBin} --interface ${iface} --duration ${duration} --mode baseline`,
+        { timeout: (duration + 60) * 1000, env }
+      );
+      if (stderr) console.error(stderr);
+      return { content: [{ type: 'text', text: `Baseline profile created:\n${stdout}\n\nSaved to: ${outputFile}` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${error.message}\n${error.stderr || ''}` }], isError: true };
+    }
+  }
+);
+
+// Tool 11: Detect anomalies against a baseline
+server.tool(
+  'detect_anomalies',
+  'Compare live traffic against a baseline profile to detect anomalies: new IPs, new ports, new protocols, DNS changes, traffic spikes, and behavioral deviations.',
+  {
+    interface: z.string().optional().default('eth0').describe('Network interface to capture from'),
+    duration: z.number().optional().default(30).describe('Monitoring duration in seconds'),
+    baselinePath: z.string().optional().default('').describe('Path to baseline JSON file (default: ./baseline.json)'),
+  },
+  async (args) => {
+    const captureBin = path.join(__dirname, 'capture-rs', 'target', 'release', 'capture-packets');
+    try { await fs.access(captureBin); } catch {
+      return { content: [{ type: 'text', text: `Error: Rust binary not found at ${captureBin}. Run: cd capture-rs && cargo build --release` }], isError: true };
+    }
+    try {
+      const iface = sanitizeIface(args.interface);
+      const duration = args.duration;
+      const baselineFile = args.baselinePath || path.join(process.cwd(), 'baseline.json');
+      try { await fs.access(baselineFile); } catch {
+        return { content: [{ type: 'text', text: `Error: Baseline file not found at ${baselineFile}. Run create_baseline first.` }], isError: true };
+      }
+      console.error(`[detect_anomalies] Monitoring on ${iface} for ${duration}s against ${baselineFile}`);
+      const env = { ...process.env, BASELINE_FILE: baselineFile };
+      const { stdout, stderr } = await execAsync(
+        `${captureBin} --interface ${iface} --duration ${duration} --mode anomaly`,
+        { timeout: (duration + 60) * 1000, env }
+      );
+      if (stderr) console.error(stderr);
+      return { content: [{ type: 'text', text: `Anomaly detection results:\n${stdout}` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${error.message}\n${error.stderr || ''}` }], isError: true };
+    }
+  }
+);
+
+// Tool 12: Deep TCP/UDP stream analysis
+server.tool(
+  'analyze_streams',
+  'Reassemble TCP streams and analyze payloads for threats: protocol mismatch, high entropy exfiltration, shell commands, C2 beacons, reverse shells, DNS tunneling, DGA domains. Live capture or PCAP file.',
+  {
+    interface: z.string().optional().default('eth0').describe('Network interface to capture from'),
+    duration: z.number().optional().default(15).describe('Capture duration in seconds'),
+    pcapPath: z.string().optional().default('').describe('Analyze a PCAP file instead of live capture'),
+  },
+  async (args) => {
+    const captureBin = path.join(__dirname, 'capture-rs', 'target', 'release', 'capture-packets');
+    try { await fs.access(captureBin); } catch {
+      return { content: [{ type: 'text', text: `Error: Rust binary not found at ${captureBin}. Run: cd capture-rs && cargo build --release` }], isError: true };
+    }
+    try {
+      const iface = sanitizeIface(args.interface);
+      const duration = args.duration;
+      let cmd;
+      if (args.pcapPath) {
+        await fs.access(args.pcapPath);
+        cmd = `${captureBin} --mode streams --file "${args.pcapPath}"`;
+        console.error(`[analyze_streams] Analyzing streams in ${args.pcapPath}`);
+      } else {
+        cmd = `${captureBin} --mode streams --interface ${iface} --duration ${duration}`;
+        console.error(`[analyze_streams] Analyzing streams on ${iface} for ${duration}s`);
+      }
+      const { stdout, stderr } = await execAsync(cmd, { timeout: (duration + 60) * 1000, maxBuffer: 10 * 1024 * 1024 });
+      if (stderr) console.error(stderr);
+      return { content: [{ type: 'text', text: `Stream analysis results:\n${stdout}` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${error.message}\n${error.stderr || ''}` }], isError: true };
+    }
+  }
+);
+
+// Source Engine monitor tool
+server.tool(
+  'source_engine_monitor',
+  'Monitor Source Engine (Garry\'s Mod/CS/TF2) game server traffic for DDoS detection. Detects A2S query floods, amplification attacks, query-only bots, high-rate clients, periodic bots, fake players, traffic spikes, and distributed attacks.',
+  {
+    interface: z.string().optional().default('eth0').describe('Network interface to capture from'),
+    duration: z.number().optional().default(30).describe('Monitoring duration in seconds'),
+    serverPort: z.number().optional().default(27015).describe('Game server port to monitor'),
+  },
+  async (args) => {
+    const captureBin = path.join(__dirname, 'capture-rs', 'target', 'release', 'capture-packets');
+    try { await fs.access(captureBin); } catch {
+      return { content: [{ type: 'text', text: `Error: Rust binary not found at ${captureBin}. Run: cd capture-rs && cargo build --release` }], isError: true };
+    }
+    try {
+      const iface = sanitizeIface(args.interface);
+      const duration = args.duration;
+      const port = Math.max(1, Math.min(65535, Math.floor(args.serverPort)));
+      const cmd = `SOURCE_PORT=${port} ${captureBin} --mode source-engine --interface ${iface} --duration ${duration}`;
+      console.error(`[source_engine_monitor] Monitoring port ${port} on ${iface} for ${duration}s`);
+      const { stdout, stderr } = await execAsync(cmd, { timeout: (duration + 60) * 1000, maxBuffer: 10 * 1024 * 1024 });
+      if (stderr) console.error(stderr);
+      return { content: [{ type: 'text', text: `Source Engine monitor results:\n${stdout}` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${error.message}\n${error.stderr || ''}` }], isError: true };
+    }
+  }
+);
+
 // Add prompts for each tool
 server.prompt(
   'capture_packets_prompt',
@@ -729,6 +860,97 @@ server.prompt(
 4. Identify top attackers and targets
 5. Check for port scanning activity
 6. Provide mitigation recommendations`
+      }
+    }]
+  })
+);
+
+server.prompt(
+  'create_baseline_prompt',
+  {
+    interface: z.string().optional().describe('Network interface'),
+    duration: z.number().optional().describe('Capture duration in seconds'),
+  },
+  ({ interface: iface = 'eth0', duration = 60 }) => ({
+    messages: [{
+      role: 'user',
+      content: {
+        type: 'text',
+        text: `Please create a baseline profile of normal network behavior on interface ${iface} for ${duration} seconds. After capturing:
+1. Summarize the normal IPs, ports, and protocols observed
+2. Note the average traffic rates and patterns
+3. Identify the DNS domains being queried
+4. Confirm the baseline is saved for future anomaly detection`
+      }
+    }]
+  })
+);
+
+server.prompt(
+  'detect_anomalies_prompt',
+  {
+    interface: z.string().optional().describe('Network interface'),
+    duration: z.number().optional().describe('Monitoring duration in seconds'),
+  },
+  ({ interface: iface = 'eth0', duration = 30 }) => ({
+    messages: [{
+      role: 'user',
+      content: {
+        type: 'text',
+        text: `Please monitor traffic on interface ${iface} for ${duration} seconds and compare against the baseline:
+1. Identify any new IPs not seen in the baseline
+2. Flag any new ports or protocols
+3. Detect traffic volume spikes
+4. Check for new or suspicious DNS domains
+5. Assess the overall security posture and recommend actions`
+      }
+    }]
+  })
+);
+
+server.prompt(
+  'analyze_streams_prompt',
+  {
+    interface: z.string().optional().describe('Network interface'),
+    duration: z.number().optional().describe('Capture duration in seconds'),
+  },
+  ({ interface: iface = 'eth0', duration = 15 }) => ({
+    messages: [{
+      role: 'user',
+      content: {
+        type: 'text',
+        text: `Please perform deep stream analysis on interface ${iface} for ${duration} seconds:
+1. Reassemble TCP streams and inspect payloads
+2. Check for protocol mismatches (e.g., non-TLS on port 443)
+3. Detect high-entropy data that could indicate exfiltration
+4. Look for shell commands, reverse shells, or C2 beacons
+5. Analyze DNS queries for tunneling or DGA patterns
+6. Provide threat severity ratings and recommended actions`
+      }
+    }]
+  })
+);
+
+server.prompt(
+  'source_engine_prompt',
+  {
+    interface: z.string().optional().describe('Network interface'),
+    duration: z.number().optional().describe('Monitoring duration in seconds'),
+    serverPort: z.number().optional().describe('Game server port'),
+  },
+  ({ interface: iface = 'eth0', duration = 30, serverPort = 27015 }) => ({
+    messages: [{
+      role: 'user',
+      content: {
+        type: 'text',
+        text: `Please monitor Source Engine game server traffic on interface ${iface} port ${serverPort} for ${duration} seconds:
+1. Analyze A2S query patterns (INFO, PLAYER, RULES)
+2. Detect query flood attacks and their severity
+3. Check for amplification abuse (response/query byte ratio)
+4. Identify query-only bots and scanners
+5. Flag high packet-rate clients and periodic bot patterns
+6. Detect distributed query attacks from multiple sources
+7. Assess overall server security and recommend mitigations`
       }
     }]
   })

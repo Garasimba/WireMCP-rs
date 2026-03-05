@@ -2,6 +2,9 @@ mod parsers;
 mod capture;
 mod stats;
 mod ddos;
+mod baseline;
+mod streams;
+mod sourceengine;
 
 use clap::Parser;
 
@@ -14,7 +17,7 @@ pub struct Cli {
     /// Capture duration in seconds
     #[arg(short, long, default_value_t = 5)]
     pub duration: u64,
-    /// Mode: basic, full, stats, conversations, ddos
+    /// Mode: basic, full, stats, conversations, ddos, baseline, anomaly, streams, source-engine
     #[arg(short, long, default_value = "basic")]
     pub mode: String,
     /// Read from pcap file instead of live capture
@@ -39,8 +42,12 @@ fn main() {
         "stats" => stats::run_stats(&cli),
         "conversations" => stats::run_conversations(&cli),
         "ddos" => ddos::run_ddos(&cli),
+        "baseline" => baseline::run_baseline(&cli),
+        "anomaly" => baseline::run_anomaly(&cli),
+        "streams" => streams::run_streams(&cli),
+        "source-engine" => sourceengine::run_source_engine(&cli),
         other => {
-            eprintln!("Error: Unknown mode '{}'. Use basic, full, stats, conversations, or ddos.", other);
+            eprintln!("Error: Unknown mode '{}'. Use basic, full, stats, conversations, ddos, baseline, anomaly, streams, or source-engine.", other);
             std::process::exit(1);
         }
     }
